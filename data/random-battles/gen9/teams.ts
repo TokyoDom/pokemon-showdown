@@ -183,7 +183,7 @@ export class RandomTeams {
 		this.noStab = NO_STAB;
 
 		const ruleTable = Dex.formats.getRuleTable(format);
-		this.maxTeamSize = ruleTable.maxTeamSize;
+		this.maxTeamSize = format.name === "[Gen 9] Draft Mode" ? 36 : ruleTable.maxTeamSize;
 		this.adjustLevel = ruleTable.adjustLevel;
 		this.maxMoveCount = ruleTable.maxMoveCount;
 		const forceMonotype = ruleTable.valueRules.get('forcemonotype');
@@ -1422,6 +1422,8 @@ export class RandomTeams {
 		if (this.adjustLevel) return this.adjustLevel;
 		// doubles levelling
 		if (isDoubles && this.randomDoublesSets[species.id]["level"]) return this.randomDoublesSets[species.id]["level"]!;
+
+		if (!isDoubles && this.randomDraftSets[species.id]["level"]) return this.randomSets[species.id]["level"]!;
 		if (!isDoubles && this.randomSets[species.id]["level"]) return this.randomSets[species.id]["level"]!;
 		// Default to tier-based levelling
 		const tier = species.tier;
@@ -1636,6 +1638,7 @@ export class RandomTeams {
 
 	randomSets: { [species: string]: RandomTeamsTypes.RandomSpeciesData } = require('./sets.json');
 	randomDoublesSets: { [species: string]: RandomTeamsTypes.RandomSpeciesData } = require('./doubles-sets.json');
+	randomDraftSets: { [species: string]: RandomTeamsTypes.RandomSpeciesData } = require('./draft-sets.json');
 
 	randomTeam() {
 		this.enforceNoDirectCustomBanlistChanges();
@@ -1647,6 +1650,7 @@ export class RandomTeams {
 		// For Monotype
 		const isMonotype = !!this.forceMonotype || ruleTable.has('sametypeclause');
 		const isDoubles = this.format.gameType !== 'singles';
+		const isDraft = this.format.name === "[Gen 9] Draft Mode";
 		const typePool = this.dex.types.names().filter(name => name !== "Stellar");
 		const type = this.forceMonotype || this.sample(typePool);
 
@@ -1663,7 +1667,16 @@ export class RandomTeams {
 		const teamDetails: RandomTeamsTypes.TeamDetails = {};
 		let numMaxLevelPokemon = 0;
 
-		const pokemonList = isDoubles ? Object.keys(this.randomDoublesSets) : Object.keys(this.randomSets);
+		let pokemonList = [];
+		if (isDraft) {
+			pokemonList = Object.keys(this.randomDraftSets);
+		} else if (isDoubles) {
+			pokemonList = Object.keys(this.randomDoublesSets);
+		} else {
+			pokemonList = Object.keys(this.randomSets);
+		}
+
+		// const pokemonList = isDoubles ? Object.keys(this.randomDoublesSets) : Object.keys(this.randomSets);
 		const [pokemonPool, baseSpeciesPool] = this.getPokemonPool(type, pokemon, isMonotype, pokemonList);
 
 		let leadsRemaining = this.format.gameType === 'doubles' ? 2 : 1;

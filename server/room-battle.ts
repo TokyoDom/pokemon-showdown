@@ -159,6 +159,7 @@ export class RoomBattlePlayer extends RoomGamePlayer<RoomBattle> {
 	}
 }
 
+// we don't want this for draft mode pick/ban phase probably
 export class RoomBattleTimer {
 	readonly battle: RoomBattle;
 	readonly timerRequesters: Set<ID>;
@@ -495,6 +496,24 @@ export interface RoomBattleOptions {
 	isBestOfSubBattle?: boolean;
 }
 
+export enum DraftPhase {
+	FirstBans,
+	SecondBans,
+	FirstPicks,
+	SecondPicks,
+	End
+}
+
+// should probably manage turn order by predefined array, e.g [{turn: p1, action: ban}, {turn: p2, action: ban}]
+interface DraftState {
+	phase: DraftPhase;
+	turn: SideID;
+	bans: Set<string>;
+	p1Picks: Set<string>;
+	p2Picks: Set<string>;
+	pool: { [key: string ]: PokemonSet };
+}
+
 export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 	override readonly gameid = 'battle' as ID;
 	override readonly room!: GameRoom;
@@ -538,6 +557,13 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 	options: RoomBattleOptions;
 	frozen?: boolean;
 	dataResolvers?: [((args: string[]) => void), ((error: Error) => void)][];
+	battleOptions: {
+		formatid: string,
+		roomid: RoomID,
+		rated: string,
+		seed?: PRNGSeed,
+	};
+	draftState?: DraftState
 	constructor(room: GameRoom, options: RoomBattleOptions) {
 		super(room);
 		const format = Dex.formats.get(options.format, true);
@@ -564,41 +590,92 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 
 		this.room.battle = this;
 
-		const battleOptions = {
+		this.battleOptions = {
 			formatid: this.format,
 			roomid: this.roomid,
 			rated: ratedMessage,
 			seed: options.seed,
 		};
+		this.timer = new RoomBattleTimer(this);
+
 		if (options.inputLog) {
 			void this.stream.write(options.inputLog);
+		} else if (format.name === "[Gen 9] Draft Mode") {
+			this.startDraftPhase();
 		} else {
-			void this.stream.write(`>start ` + JSON.stringify(battleOptions));
+			this.startBattle();
 		}
+	}
+
+	startDraftPhase() {
+		// could have preset pools of pokemon to pick from instead
+		let pool: { [key: string ]: PokemonSet } = {};
+		let buf = '|raw|Pokemon to choose from:<br/>';
+
+		while (Object.keys(pool).length < 36) {
+			const team = Teams.generate('gen9randombattle');
+			team.forEach(poke => {
+				if (!pool[poke.name] && Object.keys(pool).length < 36) {
+					pool[poke.name] = poke;
+					buf += `<button name="send" value="/draft ${poke.name}">${poke.name}</button><br/>`
+				}
+			});
+		}
+
+		this.draftState = {
+			phase: DraftPhase.FirstBans,
+			turn: "p1",
+			bans: new Set(),
+			p1Picks: new Set(),
+			p2Picks: new Set(),
+			pool,
+		};
+
+		this.room.add(buf);
+	}
+
+	endDraftPhase(p2id: ID) {
+		if (!this.draftState) return;
+
+		const p1Team = Teams.pack(Array.from(this.draftState.p1Picks).map(pick => this.draftState!.pool[pick]));
+		const p2Team = Teams.pack(Array.from(this.draftState.p2Picks).map(pick => this.draftState!.pool[pick]));
+		
+		const p2Index = this.options.players.findIndex(player => player.user.id === p2id);
+		if (p2Index === -1) throw new Error('Failed to find player in room after drafting');
+		const p1Index = p2Index === 0 ? 1 : 0;
+
+		this.options.players[p1Index].team = p1Team;
+		this.options.players[p2Index].team = p2Team;
+
+		this.startBattle();
+	}
+
+	startBattle() {
+		void this.stream.write(`>start ` + JSON.stringify(this.battleOptions));
 
 		void this.listen();
 
-		if (options.players.length > this.playerCap) {
-			throw new Error(`${options.players.length} players passed to battle ${room.roomid} but ${this.playerCap} players expected`);
+		if (this.options.players.length > this.playerCap) {
+			throw new Error(`${this.options.players.length} players passed to battle ${this.room.roomid} but ${this.playerCap} players expected`);
 		}
 		for (let i = 0; i < this.playerCap; i++) {
-			const p = options.players[i];
+			const p = this.options.players[i];
 			const player = this.addPlayer(p?.user || null, p || null);
-			if (!player) throw new Error(`failed to create player ${i + 1} in ${room.roomid}`);
+			if (!player) throw new Error(`failed to create player ${i + 1} in ${this.room.roomid}`);
 		}
-		if (options.inputLog) {
+		if (this.options.inputLog) {
 			let scanIndex = 0;
 			for (const player of this.players) {
-				const nameIndex1 = options.inputLog.indexOf(`"name":"`, scanIndex);
-				const nameIndex2 = options.inputLog.indexOf(`"`, nameIndex1 + 8);
+				const nameIndex1 = this.options.inputLog.indexOf(`"name":"`, scanIndex);
+				const nameIndex2 = this.options.inputLog.indexOf(`"`, nameIndex1 + 8);
 				if (nameIndex1 < 0 || nameIndex2 < 0) break; // shouldn't happen. incomplete inputlog?
 				scanIndex = nameIndex2 + 1;
-				const name = options.inputLog.slice(nameIndex1 + 8, nameIndex2);
+				const name = this.options.inputLog.slice(nameIndex1 + 8, nameIndex2);
 				player.name = name;
 				player.hasTeam = true;
 			}
 		}
-		this.timer = new RoomBattleTimer(this);
+
 		if (Config.forcetimer || this.format.includes('blitz')) this.timer.start();
 		this.start();
 	}
@@ -632,6 +709,7 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 		request.isWait = true;
 		request.choice = choice;
 
+		// this is what interacts with the battle
 		void this.stream.write(`>${player.slot} ${choice}`);
 	}
 	override undo(user: User, data: string) {

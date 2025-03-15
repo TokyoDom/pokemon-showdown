@@ -98,6 +98,7 @@ export class BattleStream extends Streams.ObjectReadWriteStream<string> {
 	}
 
 	_writeLine(type: string, message: string) {
+		console.log(type, message);
 		switch (type) {
 		case 'start':
 			const options = JSON.parse(message);
@@ -119,7 +120,14 @@ export class BattleStream extends Streams.ObjectReadWriteStream<string> {
 		case 'p4':
 			if (message === 'undo') {
 				this.battle!.undoChoice(type);
-			} else {
+			}  else {
+				// we can maybe use teambuilder phase, intercept message here when startsWith team?
+				// if (message.startsWith('team ') && this.battle?.format) {
+				// 	const i = parseInt(message.split(' ')[1].split('')[0])
+				// 	this.battle![type]?.addPokemon(this.battle![type].team[i]);
+				// 	this.battle?.makeRequest('teampreview');
+				// 	break;
+				// }
 				this.battle!.choose(type, message);
 			}
 			break;
